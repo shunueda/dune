@@ -450,24 +450,22 @@ let opam_package_to_lock_file_pkg
     |> List.map ~f:(fun (opam_basename, opam_url) ->
       ( Path.Local.of_string (OpamFilename.Base.to_string opam_basename)
       , let url = Loc.none, OpamFile.URL.url opam_url in
-        let checksum =
-          match OpamFile.URL.checksum opam_url with
-          | [] -> None
-          | checksum :: _ -> Some (Loc.none, Checksum.of_opam_hash checksum)
+        let checksums =
+          OpamFile.URL.checksum opam_url
+          |> List.map ~f:(fun hash -> Loc.none, Checksum.of_opam_hash hash)
         in
-        { Source.url; checksum } ))
+        { Source.url; checksums } ))
   in
   let info =
     let url = OpamFile.OPAM.url opam_file in
     let source =
       Option.map url ~f:(fun (url : OpamFile.URL.t) ->
-        let checksum =
+        let checksums =
           OpamFile.URL.checksum url
-          |> List.hd_opt
-          |> Option.map ~f:(fun hash -> Loc.none, Checksum.of_opam_hash hash)
+          |> List.map ~f:(fun hash -> Loc.none, Checksum.of_opam_hash hash)
         in
         let url = Loc.none, OpamFile.URL.url url in
-        { Source.url; checksum })
+        { Source.url; checksums })
     in
     let dev =
       pinned

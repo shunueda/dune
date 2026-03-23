@@ -2,40 +2,40 @@ open Import
 
 type t =
   { url : Loc.t * OpamUrl.t
-  ; checksum : (Loc.t * Checksum.t) option
+  ; checksums : (Loc.t * Checksum.t) list
   }
 
-let remove_locs { url = _loc, url; checksum } =
+let remove_locs { url = _loc, url; checksums } =
   { url = Loc.none, url
-  ; checksum = Option.map checksum ~f:(fun (_loc, checksum) -> Loc.none, checksum)
+  ; checksums = List.map checksums ~f:(fun (_loc, checksum) -> Loc.none, checksum)
   }
 ;;
 
 let equal
-      { url = loc, url; checksum }
-      { url = other_loc, other_url; checksum = other_checksum }
+      { url = loc, url; checksums }
+      { url = other_loc, other_url; checksums = other_checksums }
   =
   Loc.equal loc other_loc
   && OpamUrl.equal url other_url
-  && Option.equal
+  && List.equal
        (fun (loc, checksum) (other_loc, other_checksum) ->
           Loc.equal loc other_loc && Checksum.equal checksum other_checksum)
-       checksum
-       other_checksum
+       checksums
+       other_checksums
 ;;
 
-let to_dyn { url = _loc, url; checksum } =
+let to_dyn { url = _loc, url; checksums } =
   Dyn.record
     [ "url", Dyn.string (OpamUrl.to_string url)
-    ; "checksum", Dyn.option (fun (_loc, checksum) -> Checksum.to_dyn checksum) checksum
+    ; "checksums", Dyn.list (fun (_loc, checksum) -> Checksum.to_dyn checksum) checksums
     ]
 ;;
 
-let hash { url; checksum } =
+let hash { url; checksums } =
   Tuple.T2.hash
     (Tuple.T2.hash Loc.hash OpamUrl.hash)
-    (Option.hash (Tuple.T2.hash Loc.hash Checksum.hash))
-    (url, checksum)
+    (List.hash (Tuple.T2.hash Loc.hash Checksum.hash))
+    (url, checksums)
 ;;
 
 let digest_feed = Dune_digest.Feed.generic
@@ -75,15 +75,15 @@ let fetch_and_hash_archive_cached (url_loc, url) =
 ;;
 
 let compute_missing_checksum
-      ({ url = url_loc, url; checksum } as fetch)
+      ({ url = url_loc, url; checksums } as fetch)
       package_name
       ~pinned
   =
   let open Fiber.O in
-  match checksum with
-  | Some _ -> Fiber.return fetch
-  | None when OpamUrl.is_local url || OpamUrl.is_version_control url -> Fiber.return fetch
-  | None ->
+  match checksums with
+  | _ :: _ -> Fiber.return fetch
+  | [] when OpamUrl.is_local url || OpamUrl.is_version_control url -> Fiber.return fetch
+  | [] ->
     if
       not pinned
       (* No point in warning this about pinned packages. The user explicitly
@@ -101,7 +101,7 @@ let compute_missing_checksum
            ]);
     fetch_and_hash_archive_cached (url_loc, url)
     >>| Option.map ~f:(fun checksum ->
-      { url = url_loc, url; checksum = Some (Loc.none, checksum) })
+      { url = url_loc, url; checksums = [ Loc.none, checksum ] })
     >>| Option.value ~default:fetch
 ;;
 
@@ -115,21 +115,20 @@ end
 let decode_fetch =
   let open Decoder in
   let+ url_loc, url = field Fields.url OpamUrl.decode_loc
-  and+ checksum = field_o Fields.checksum (located string) in
-  let checksum =
-    match checksum with
-    | None -> None
-    | Some ((loc, _) as checksum) ->
+  and+ checksums = field_o Fields.checksum (repeat (located string)) in
+  let checksums =
+    Option.value ~default:[] checksums
+    |> List.map ~f:(fun ((loc, _) as checksum) ->
       let checksum = Checksum.of_string_user_error checksum |> User_error.ok_exn in
-      Some (loc, checksum)
+      loc, checksum)
   in
-  { url = url_loc, url; checksum }
+  { url = url_loc, url; checksums }
 ;;
 
 let external_copy (loc, path) =
   let path = Path.External.to_string path in
   let url : OpamUrl.t = { transport = "file"; path; hash = None; backend = `rsync } in
-  { url = loc, url; checksum = None }
+  { url = loc, url; checksums = [] }
 ;;
 
 let decode =
@@ -150,10 +149,10 @@ let decode =
     ]
 ;;
 
-let encode_fetch_field { url = _loc, url; checksum } =
+let encode_fetch_field { url = _loc, url; checksums } =
   let open Encoder in
   [ field Fields.url string (OpamUrl.to_string url)
-  ; field_o Fields.checksum Checksum.encode (Option.map checksum ~f:snd)
+  ; field_l Fields.checksum Checksum.encode (List.map checksums ~f:snd)
   ]
 ;;
 

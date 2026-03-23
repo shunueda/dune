@@ -152,19 +152,17 @@ let unpack_archive ~archive_driver ~target ~archive =
     Pp.textf "Unable to extract %s" (Path.to_string_maybe_quoted archive))
 ;;
 
-let check_checksum checksum path =
-  let checksum_error =
-    match checksum with
-    | None -> None
-    | Some expected ->
-      OpamHash.mismatch (Path.to_string path) (Checksum.to_opam_hash expected)
-  in
-  match checksum_error with
-  | Some c -> Error (Checksum_mismatch (Checksum.of_opam_hash c))
+let check_checksums checksums path =
+  let path_str = Path.to_string path in
+  List.find_map checksums ~f:(fun expected ->
+    OpamHash.mismatch path_str (Checksum.to_opam_hash expected)
+    |> Option.map ~f:(fun actual -> Checksum_mismatch (Checksum.of_opam_hash actual)))
+  |> function
   | None -> Ok ()
+  | Some err -> Error err
 ;;
 
-let with_download url checksum ~target ~f =
+let with_download url checksums ~target ~f =
   let url = OpamUrl.to_string url in
   let temp_dir =
     let prefix = "dune" in
@@ -180,13 +178,13 @@ let with_download url checksum ~target ~f =
   >>= function
   | Error message -> Fiber.return @@ Error (Unavailable (Some message))
   | Ok () ->
-    (match check_checksum checksum output with
+    (match check_checksums checksums output with
      | Ok () -> f output
      | Error _ as e -> Fiber.return e)
 ;;
 
-let fetch_curl ~unpack:unpack_flag ~checksum ~target (url : OpamUrl.t) =
-  with_download url checksum ~target ~f:(fun output ->
+let fetch_curl ~unpack:unpack_flag ~checksums ~target (url : OpamUrl.t) =
+  with_download url checksums ~target ~f:(fun output ->
     match unpack_flag with
     | false ->
       Unix.rename (Path.to_string output) (Path.to_string target);
@@ -224,7 +222,7 @@ let fetch_git rev_store ~target ~url:(url_loc, url) =
     Ok res
 ;;
 
-let fetch_local ~checksum ~target (url, url_loc) =
+let fetch_local ~checksums ~target (url, url_loc) =
   if not (OpamUrl.is_local url)
   then Code_error.raise "fetch_local: url should be file://" [ "url", OpamUrl.to_dyn url ];
   let path =
@@ -233,7 +231,7 @@ let fetch_local ~checksum ~target (url, url_loc) =
     | `Git | `Archive ->
       Code_error.raise "fetch_local: not a path" [ "url", OpamUrl.to_dyn url ]
   in
-  match check_checksum checksum path with
+  match check_checksums checksums path with
   | Error _ as e -> Fiber.return e
   | Ok () ->
     let+ unpack_result =
@@ -247,14 +245,14 @@ let fetch_local ~checksum ~target (url, url_loc) =
       Unavailable (Some (User_message.make [ Pp.text "Could not unpack:"; pp ])))
 ;;
 
-let fetch ~unpack ~checksum ~target ~url:(url_loc, url) =
+let fetch ~unpack ~checksums ~target ~url:(url_loc, url) =
   let event =
     Dune_trace.(
       Out.start (global ()) (fun () ->
         Dune_trace.Event.Async.fetch
           ~url:(OpamUrl.to_string url)
           ~target
-          ~checksum:(Option.map ~f:Checksum.to_string checksum)))
+          ~checksums:(List.map checksums ~f:(fun c -> Sexp.Atom (Checksum.to_string c)))))
   in
   let unsupported_backend s =
     User_error.raise ~loc:url_loc [ Pp.textf "Unsupported backend: %s" s ]
@@ -269,18 +267,18 @@ let fetch ~unpack ~checksum ~target ~url:(url_loc, url) =
        | `git ->
          let* rev_store = Rev_store.get in
          fetch_git rev_store ~target ~url:(url_loc, url)
-       | `http -> fetch_curl ~unpack ~checksum ~target url
+       | `http -> fetch_curl ~unpack ~checksums ~target url
        | `rsync ->
          if not unpack
          then
            Code_error.raise "fetch_local: unpack is not set" [ "url", OpamUrl.to_dyn url ];
-         fetch_local ~checksum ~target (url, url_loc)
+         fetch_local ~checksums ~target (url, url_loc)
        | `hg -> unsupported_backend "mercurial"
        | `darcs -> unsupported_backend "darcs")
 ;;
 
 let fetch_without_checksum ~unpack ~target ~url =
-  fetch ~unpack ~checksum:None ~url ~target
+  fetch ~unpack ~checksums:[] ~url ~target
   >>| function
   | Ok () -> Ok ()
   | Error (Checksum_mismatch _) -> assert false

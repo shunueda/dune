@@ -69,7 +69,7 @@ module Spec = struct
   type ('path, 'target) t =
     { target : 'target
     ; url : Loc.t * OpamUrl.t
-    ; checksum : (Loc.t * Checksum.t) option
+    ; checksums : (Loc.t * Checksum.t) list
     ; kind : kind
     }
 
@@ -78,7 +78,7 @@ module Spec = struct
   let bimap t _ g = { t with target = g t.target }
   let is_useful_to ~memoize = memoize
 
-  let encode { target; url = _, url; checksum; kind } _ encode_target : Sexp.t =
+  let encode { target; url = _, url; checksums; kind } _ encode_target : Sexp.t =
     List
       ([ encode_target target
        ; Sexp.Atom (OpamUrl.to_string url)
@@ -90,23 +90,21 @@ module Spec = struct
        @ (match OpamUrl.rev url with
           | None -> []
           | Some rev -> [ Sexp.Atom rev ])
-       @
-       match checksum with
-       | None -> []
-       | Some (_, checksum) -> [ Atom (Checksum.to_string checksum) ])
+       @ List.map checksums ~f:(fun (_, checksum) ->
+         Sexp.Atom (Checksum.to_string checksum)))
   ;;
 
-  let action { target; url = loc_url, url; checksum; kind } ~ectx:_ ~eenv:_ =
+  let action { target; url = loc_url, url; checksums; kind } ~ectx:_ ~eenv:_ =
     let open Fiber.O in
     let* () = Fiber.return () in
     let target = Path.build target in
-    (let checksum = Option.map checksum ~f:snd in
+    (let checksums = List.map checksums ~f:snd in
      Dune_pkg.Fetch.fetch
        ~unpack:
          (match kind with
           | `File -> false
           | `Directory -> true)
-       ~checksum
+       ~checksums
        ~target
        ~url:(loc_url, url))
     >>= function
@@ -136,12 +134,12 @@ module Spec = struct
          Fpath.traverse ~init:() ~dir:target_abs ~on_symlink:(`Call on_symlink) ());
       Fiber.return ()
     | Error (Checksum_mismatch actual_checksum) ->
-      (match checksum with
-       | None ->
+      (match checksums with
+       | [] ->
          User_error.raise
            ~loc:loc_url
            [ Pp.text "No checksum provided. It should be:"; Checksum.pp actual_checksum ]
-       | Some (loc, _) ->
+       | (loc, _) :: _ ->
          let loc = Dune_pkg.Lock_dir.loc_in_source_tree loc in
          User_error.raise
            ~loc
@@ -156,7 +154,7 @@ end
 
 module A = Action_ext.Make (Spec)
 
-let action ~url ~checksum ~target ~kind = A.action { Spec.target; checksum; url; kind }
+let action ~url ~checksums ~target ~kind = A.action { Spec.target; checksums; url; kind }
 
 let extract_checksums_and_urls (lockdir : Dune_pkg.Lock_dir.t) =
   Dune_pkg.Lock_dir.Packages.to_pkg_list lockdir.packages
@@ -174,10 +172,10 @@ let extract_checksums_and_urls (lockdir : Dune_pkg.Lock_dir.t) =
            | `Directory_or_archive _ -> checksums, urls
            | `Fetch ->
              let url = source.url in
-             (match source.checksum with
-              | Some ((_, checksum) as checksum_with_loc) ->
+             (match source.checksums with
+              | ((_, checksum) as checksum_with_loc) :: _ ->
                 Checksum.Map.set checksums checksum (url, checksum_with_loc), urls
-              | None -> checksums, Digest.Map.set urls (digest_of_url (snd url)) url)))
+              | [] -> checksums, Digest.Map.set urls (digest_of_url (snd url)) url)))
 ;;
 
 let find_checksum, find_url =
@@ -234,12 +232,12 @@ let find_checksum, find_url =
   find_checksum, find_url
 ;;
 
-let gen_rules_for_checksum_or_url (loc_url, (url : OpamUrl.t)) checksum =
+let gen_rules_for_checksum_or_url (loc_url, (url : OpamUrl.t)) checksums =
   let loc_url = Dune_pkg.Lock_dir.loc_in_source_tree loc_url in
   let checksum_or_url =
-    match checksum with
-    | Some (_, checksum) -> `Checksum checksum
-    | None -> `Url url
+    match checksums with
+    | (_, checksum) :: _ -> `Checksum checksum
+    | [] -> `Url url
   in
   let directory_targets =
     let target_dir = make_target ~kind:`Directory checksum_or_url in
@@ -267,7 +265,7 @@ let gen_rules_for_checksum_or_url (loc_url, (url : OpamUrl.t)) checksum =
         Action_builder.with_no_targets
           (let open Action_builder.O in
            let+ url = url in
-           action ~url:(loc_url, url) ~checksum ~target ~kind
+           action ~url:(loc_url, url) ~checksums ~target ~kind
            |> Action.Full.make ~can_go_in_shared_cache:true)
     in
     let dir_rule =
@@ -306,14 +304,14 @@ let gen_rules ~dir ~components =
   | [ "checksum"; checksum ] ->
     let checksum = Dune_pkg.Checksum.parse_string_exn (Loc.none, checksum) in
     let+ url, checksum = find_checksum checksum in
-    gen_rules_for_checksum_or_url url (Some checksum)
+    gen_rules_for_checksum_or_url url [ checksum ]
   | [ "url"; digest ] ->
     let+ url =
       match Digest.from_hex digest with
       | Some s -> find_url s
       | None -> User_error.raise [ Pp.textf "invalid digest %s" digest ]
     in
-    gen_rules_for_checksum_or_url url None
+    gen_rules_for_checksum_or_url url []
   | _ -> Memo.return Gen_rules.no_rules
 ;;
 
@@ -363,9 +361,9 @@ let fetch ~target kind (source : Source.t) =
     | `Directory_or_archive p -> Path.external_ p
     | `Fetch ->
       let url_or_checksum =
-        match source.checksum with
-        | Some (_, checksum) -> `Checksum checksum
-        | None -> `Url (snd source.url)
+        match source.checksums with
+        | (_, checksum) :: _ -> `Checksum checksum
+        | [] -> `Url (snd source.url)
       in
       Path.build (make_target ~kind url_or_checksum)
   in
@@ -385,7 +383,7 @@ let fetch ~target kind (source : Source.t) =
       | `Directory_or_archive _ ->
         (* For local sources, we don't need an intermediate step copying to the
            .fetch context. This would just add pointless additional overhead. *)
-        action ~url:source.url ~checksum:source.checksum ~target ~kind
+        action ~url:source.url ~checksums:source.checksums ~target ~kind
     in
     Action.Full.make ~can_go_in_shared_cache:true action
     |> Action_builder.With_targets.return

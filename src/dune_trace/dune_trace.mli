@@ -32,7 +32,7 @@ module Event : sig
     type data
 
     val create_sandbox : loc:Loc.t -> data
-    val fetch : url:string -> target:Path.t -> checksum:string option -> data
+    val fetch : url:string -> target:Path.t -> checksums:Event.t list -> data
   end
 
   type t

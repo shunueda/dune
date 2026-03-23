@@ -93,12 +93,12 @@ module Async = struct
     }
   ;;
 
-  let fetch ~url ~target ~checksum =
+  let fetch ~url ~target ~checksums =
     let args =
       let args = [ "url", Arg.string url; "target", Arg.path target ] in
-      match checksum with
-      | None -> args
-      | Some c -> ("checksum", Arg.string c) :: args
+      match checksums with
+      | [] -> args
+      | c -> ("checksum", Arg.list c) :: args
     in
     { args = Some args; cat = Pkg; name = "fetch" }
   ;;

@@ -40,10 +40,10 @@ let serve_once ~filename =
   port, thread
 ;;
 
-let download ?(reproducible = true) ~unpack ~port ~filename ~target ?checksum () =
+let download ?(reproducible = true) ~unpack ~port ~filename ~target ~checksums () =
   let open Fiber.O in
   let url = url ~port ~filename in
-  let* res = Fetch.fetch ~unpack ~checksum ~target ~url:(Loc.none, url) in
+  let* res = Fetch.fetch ~unpack ~checksums ~target ~url:(Loc.none, url) in
   match res with
   | Error (Unavailable None) ->
     let errs = [ Pp.text "Failure while downloading" ] in
@@ -51,7 +51,7 @@ let download ?(reproducible = true) ~unpack ~port ~filename ~target ?checksum ()
   | Error (Unavailable (Some msg)) ->
     User_error.raise ~loc:Loc.none [ User_message.pp msg ]
   | Error (Checksum_mismatch actual_checksum) ->
-    let expected_checksum = Option.value_exn checksum in
+    let expected_checksum = List.hd checksums in
     User_error.raise
       ~loc:Loc.none
       [ Pp.text "Expected checksum was"
@@ -86,7 +86,7 @@ let%expect_test "downloading simple file" =
        ~port
        ~filename:""
        ~target:(subdir destination)
-       ~checksum:(calculate_checksum ~filename));
+       ~checksums:[ calculate_checksum ~filename ]);
   Thread.join server;
   let served_content = Io.String_path.read_file filename in
   let downloaded_content = Io.String_path.read_file destination in
@@ -124,7 +124,7 @@ let%expect_test "downloading but the checksums don't match" =
        ~port
        ~filename:""
        ~target:(subdir destination)
-       ~checksum:wrong_checksum);
+       ~checksums:[ wrong_checksum ]);
   Thread.join server;
   print_endline "Finished successfully?";
   [%expect.unreachable]
@@ -142,7 +142,8 @@ let%expect_test "downloading but the checksums don't match" =
 let%expect_test "downloading, without any checksum" =
   let port, server = serve_once ~filename:plaintext_md in
   let destination = "destination.md" in
-  run (download ~unpack:false ~port ~filename:"" ~target:(subdir destination));
+  run
+    (download ~unpack:false ~port ~filename:"" ~target:(subdir destination) ~checksums:[]);
   Thread.join server;
   print_endline "Finished successfully, no checksum verification";
   [%expect
@@ -160,7 +161,7 @@ let%expect_test "downloading, tarball" =
         deterministic enough to print the actual checksum *)
        ~reproducible:false
        ~unpack:true
-       ~checksum:wrong_checksum
+       ~checksums:[ wrong_checksum ]
        ~port
        ~filename:""
        ~target:(subdir destination));
@@ -183,7 +184,7 @@ let%expect_test "downloading, tarball with no checksum match" =
      correct location. *)
   let port, server = serve_once ~filename:archive in
   let target = subdir "tarball" in
-  run (download ~reproducible:false ~unpack:true ~port ~filename:"" ~target);
+  run (download ~reproducible:false ~unpack:true ~port ~filename:"" ~target ~checksums:[]);
   Thread.join server;
   print_endline "Finished successfully, no checksum verification";
   (* print all the files in the target directory *)
