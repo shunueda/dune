@@ -2,7 +2,7 @@ open Import
 
 type t =
   { url : Loc.t * OpamUrl.t
-  ; checksum : (Loc.t * Checksum.t) option
+  ; checksums : (Loc.t * Checksum.t) list
   }
 
 val equal : t -> t -> bool

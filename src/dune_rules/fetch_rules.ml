@@ -174,7 +174,7 @@ let extract_checksums_and_urls (lockdir : Dune_pkg.Lock_dir.t) =
            | `Directory_or_archive _ -> checksums, urls
            | `Fetch ->
              let url = source.url in
-             (match source.checksum with
+             (match source.checksums with
               | Some ((_, checksum) as checksum_with_loc) ->
                 Checksum.Map.set checksums checksum (url, checksum_with_loc), urls
               | None -> checksums, Digest.Map.set urls (digest_of_url (snd url)) url)))

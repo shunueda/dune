@@ -261,7 +261,7 @@ let%expect_test "encode/decode round trip test for lockdir with complex deps" =
                 [ Path.Local.of_string "one", extra_source
                 ; ( Path.Local.of_string "two"
                   , { url = Loc.none, OpamUrl.of_string "file://randomurl"
-                    ; checksum = None
+                    ; checksums = []
                     } )
                 ]
             }
@@ -286,12 +286,12 @@ let%expect_test "encode/decode round trip test for lockdir with complex deps" =
             ; source =
                 Some
                   { url = Loc.none, OpamUrl.of_string "https://github.com/foo/b"
-                  ; checksum =
-                      Some
-                        ( Loc.none
+                  ; checksums =
+                      [ ( Loc.none
                         , Checksum.of_string
                             "sha256=adfc38f14c0188a2ad80d61451d011d27ab8839b717492d7ad42f7cb911c54c3"
                         )
+                      ]
                   }
             }
         } )
@@ -312,7 +312,7 @@ let%expect_test "encode/decode round trip test for lockdir with complex deps" =
             ; source =
                 Some
                   { url = Loc.none, OpamUrl.of_string "https://github.com/foo/c"
-                  ; checksum = None
+                  ; checksums = []
                   }
             }
         } )
